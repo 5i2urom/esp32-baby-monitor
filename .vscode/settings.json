@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "i2c.h": "c",
+        "i2c-lcd.h": "c",
+        "esp_log.h": "c",
+        "unistd.h": "c"
+    }
+}
