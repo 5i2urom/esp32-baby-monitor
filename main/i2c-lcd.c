@@ -3,13 +3,8 @@
 #include "driver/i2c.h"
 #include "unistd.h"
 
-#define SLAVE_ADDRESS_LCD 0x27
-
-esp_err_t err;
-
-#define I2C_NUM I2C_NUM_0
-
 static const char *TAG = "LCD";
+esp_err_t err;
 
 // Функция отправки команд в LCD
 void lcd_send_cmd(char cmd)
