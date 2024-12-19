@@ -6,7 +6,14 @@
         "unistd.h": "c",
         "dht.h": "c",
         "gpio.h": "c",
-        "adc_oneshot.h": "c",
-        "adc.h": "c"
+        "adc.h": "c",
+        "ble_svc_gatt.h": "c",
+        "nimble_port_freertos.h": "c",
+        "ble-connect.h": "c",
+        "wifi-connect.h": "c",
+        "ip4_addr.h": "c",
+        "esp_http_server.h": "c",
+        "compare": "c",
+        "cstdint": "c"
     }
 }
