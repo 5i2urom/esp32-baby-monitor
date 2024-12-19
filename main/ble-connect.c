@@ -1,19 +1,14 @@
 #include "ble-connect.h"
-#include <stdio.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "freertos/event_groups.h"
-#include "esp_event.h"
-#include "esp_log.h"
-#include "esp_nimble_hci.h"
 #include "nimble/nimble_port.h"
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
 #include "services/gap/ble_svc_gap.h"
 #include "services/gatt/ble_svc_gatt.h"
-#include "sdkconfig.h"
 #include <string.h>
-// #include "wifi-connect.h"
+#include "nvs_flash.h"
+#include "nvs.h"
 
 uint8_t ble_addr_type;
 void ble_app_advertise(void);
@@ -21,183 +16,94 @@ void ble_app_advertise(void);
 extern char ip_str[16];
 extern int16_t threshold_noise_level;
 
-static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg)
-{
+
+static int device_write(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg) {
     char *data = (char *)ctxt->om->om_data;
-    size_t data_len = ctxt->om->om_len;
+    char *ssid = NULL;
+    char *password = NULL;
 
-    char processed_data[data_len + 1];
-    memset(processed_data, 0, sizeof(processed_data));
-    strncpy(processed_data, data, data_len);
-    processed_data[data_len] = '\0';
+    if (strncmp(data, "wifi ", 5) == 0) {
+        char *ptr = data + 5;
+        ssid = ptr;
 
-    char *space = strchr(processed_data, ' ');
-    size_t command_len = space - processed_data;
-    char command[command_len + 1];
-    snprintf(command, sizeof(command), "%.*s", (int)command_len, processed_data);
-
-    char *value = space + 1;
-
-    if (strcmp(command, "wifi") == 0) {
-        char *delimiter = strchr(value, ':');
-        if (delimiter == NULL) {
-            ESP_LOGE(TAG, "Invalid Wi-Fi format. Expected SSID:password");
-            return -1;
+        while (*ptr && *ptr != ':') {
+            ptr++;
         }
 
-        size_t ssid_len = delimiter - value;
-        char *password_start = delimiter + 1;
-        size_t pass_len = strlen(password_start);
-
-        char ssid[ssid_len + 1];
-        char password[pass_len + 1];
-        
-        snprintf(ssid, sizeof(ssid), "%.*s", (int)ssid_len, value);
-        snprintf(password, sizeof(password), "%s", password_start);
-
-        ESP_LOGI(TAG, "Received Wi-Fi credentials");
-
+        if (*ptr == ':') {
+            *ptr = '\0';
+            password = ptr + 1;            
+        }
         update_wifi_credentials(ssid, password);
-        return 0;
-
-    } else if (strcmp(command, "noise") == 0) {
-        threshold_noise_level = atoi(value);
-        if (threshold_noise_level <= 0) {
-            ESP_LOGE(TAG, "Invalid noise value");
-            return -1;
-        }
-
+    } else if (strncmp(data, "noise ", 5) == 0) {
+        threshold_noise_level = atoi(data + 6);
+        if (threshold_noise_level <= 0) return -1;
         nvs_handle_t nvs_handle;
-        esp_err_t err;
-
-        err = nvs_open("storage", NVS_READWRITE, &nvs_handle);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to open NVS: %s", esp_err_to_name(err));
-            return -1;
-        }
-
-        err = nvs_set_i16(nvs_handle, "noise_level", threshold_noise_level);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to save noise level: %s", esp_err_to_name(err));
-            nvs_close(nvs_handle);
-            return -1;
-        }
-
-        err = nvs_commit(nvs_handle);
-        if (err != ESP_OK) {
-            ESP_LOGE(TAG, "Failed to commit changes: %s", esp_err_to_name(err));
-            nvs_close(nvs_handle);
-            return -1;
-        }
-
+        nvs_open("storage", NVS_READWRITE, &nvs_handle);
+        nvs_set_i16(nvs_handle, "noise_level", threshold_noise_level);
+        nvs_commit(nvs_handle);
         nvs_close(nvs_handle);
-        ESP_LOGI(TAG, "Noise level saved successfully");
-        return 0;
+    } else return -1;
 
-    } else {
-        ESP_LOGE(TAG, "Unknown command");
-        return -1;
-    }
+    return 0;
 }
 
-static int device_read(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg)
-{
+static int device_read(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg) {
     if (strlen(ip_str) > 0) {
         os_mbuf_append(ctxt->om, ip_str, strlen(ip_str));
     } else {
-        const char *no_ip = "No IP";
-        os_mbuf_append(ctxt->om, no_ip, strlen(no_ip));
+        os_mbuf_append(ctxt->om, "No IP", 5);
     }
     return 0;
 }
 
-// Array of pointers to other service definitions
-// UUID - Universal Unique Identifier
 const struct ble_gatt_svc_def gatt_svcs[] = {
     {.type = BLE_GATT_SVC_TYPE_PRIMARY,
-     .uuid = BLE_UUID16_DECLARE(0x180),                 // Define UUID for device type
+     .uuid = BLE_UUID16_DECLARE(0x180),
      .characteristics = (struct ble_gatt_chr_def[]){
-         {.uuid = BLE_UUID16_DECLARE(0xFEF4),           // Define UUID for reading
+         {.uuid = BLE_UUID16_DECLARE(0xFEF4),
           .flags = BLE_GATT_CHR_F_READ,
           .access_cb = device_read},
-         {.uuid = BLE_UUID16_DECLARE(0xDEAD),           // Define UUID for writing
+         {.uuid = BLE_UUID16_DECLARE(0xDEAD),
           .flags = BLE_GATT_CHR_F_WRITE,
           .access_cb = device_write},
          {0}}},
     {0}};
 
-// BLE event handling
-static int ble_gap_event(struct ble_gap_event *event, void *arg)
-{
-    switch (event->type)
-    {
-    // Advertise if connected
-    case BLE_GAP_EVENT_CONNECT:
-        ESP_LOGI("GAP", "BLE GAP EVENT CONNECT %s", event->connect.status == 0 ? "OK!" : "FAILED!");
-        if (event->connect.status != 0)
-        {
+static int ble_gap_event(struct ble_gap_event *event, void *arg) {
+    switch (event->type) {
+        case BLE_GAP_EVENT_CONNECT:
+            if (event->connect.status != 0) ble_app_advertise();
+            break;
+        case (BLE_GAP_EVENT_DISCONNECT || BLE_GAP_EVENT_ADV_COMPLETE):
             ble_app_advertise();
-        }
-        break;
-    // Advertise again after completion of the event
-    case BLE_GAP_EVENT_DISCONNECT:
-        ESP_LOGI("GAP", "BLE GAP EVENT DISCONNECTED");
-        ble_app_advertise();
-        break;
-    case BLE_GAP_EVENT_ADV_COMPLETE:
-        ESP_LOGI("GAP", "BLE GAP EVENT");
-        ble_app_advertise();
-        break;
-    default:
-        break;
+            break;
+        default:
+            break;
     }
     return 0;
 }
 
-// Define the BLE connection
-void ble_app_advertise(void)
-{
-    // GAP - device name definition
+void ble_app_advertise(void) {
     struct ble_hs_adv_fields fields;
-    const char *device_name;
     memset(&fields, 0, sizeof(fields));
-    device_name = ble_svc_gap_device_name(); // Read the BLE device name
-    fields.name = (uint8_t *)device_name;
-    fields.name_len = strlen(device_name);
+    fields.name = (uint8_t *)ble_svc_gap_device_name();
+    fields.name_len = strlen((char *)fields.name);
     fields.name_is_complete = 1;
     ble_gap_adv_set_fields(&fields);
 
-    // GAP - device connectivity definition
     struct ble_gap_adv_params adv_params;
     memset(&adv_params, 0, sizeof(adv_params));
-    adv_params.conn_mode = BLE_GAP_CONN_MODE_UND; // connectable or non-connectable
-    adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN; // discoverable or non-discoverable
+    adv_params.conn_mode = BLE_GAP_CONN_MODE_UND;
+    adv_params.disc_mode = BLE_GAP_DISC_MODE_GEN;
     ble_gap_adv_start(ble_addr_type, NULL, BLE_HS_FOREVER, &adv_params, ble_gap_event, NULL);
 }
 
-// The application
-void ble_app_on_sync(void)
-{
-    ble_hs_id_infer_auto(0, &ble_addr_type); // Determines the best address type automatically
-    ble_app_advertise();                     // Define the BLE connection
+void ble_app_on_sync(void) {
+    ble_hs_id_infer_auto(0, &ble_addr_type);
+    ble_app_advertise();
 }
 
-// The infinite task
-void host_task(void *param)
-{
-    nimble_port_run(); // This function will return only when nimble_port_stop() is executed
+void host_task(void *param) {
+    nimble_port_run();
 }
-
-// void app_main()
-// {
-//     nvs_flash_init();                          // 1 - Initialize NVS flash using
-//     // esp_nimble_hci_and_controller_init();      // 2 - Initialize ESP controller
-//     nimble_port_init();                        // 3 - Initialize the host stack
-//     ble_svc_gap_device_name_set("BLE-Server"); // 4 - Initialize NimBLE configuration - server name
-//     ble_svc_gap_init();                        // 4 - Initialize NimBLE configuration - gap service
-//     ble_svc_gatt_init();                       // 4 - Initialize NimBLE configuration - gatt service
-//     ble_gatts_count_cfg(gatt_svcs);            // 4 - Initialize NimBLE configuration - config gatt services
-//     ble_gatts_add_svcs(gatt_svcs);             // 4 - Initialize NimBLE configuration - queues gatt services.
-//     ble_hs_cfg.sync_cb = ble_app_on_sync;      // 5 - Initialize application
-//     nimble_port_freertos_init(host_task);      // 6 - Run the thread
-// }
